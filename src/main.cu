@@ -20,6 +20,7 @@ static void print_help(const char* prog) {
     printf("  --mode <kernel|e2e>      Timing mode (default: kernel)\n");
     printf("  --warmup <int>           Warmup iterations (default: 5)\n");
     printf("  --iters <int>            Timed iterations (default: 20)\n");
+    printf("  --format <human|json>    Output format (default: human)\n");
     printf("  --help                   Show this help\n");
     printf("\n");
     printf("Either --size or --nx must be provided.\n");
@@ -40,6 +41,55 @@ static const char* mode_name(TimingMode mode) {
     return mode == TimingMode::Kernel ? "kernel" : "e2e";
 }
 
+static const char* dtype_short_name(DataType dtype) {
+    switch (dtype) {
+    case DataType::Float32:    return "float32";
+    case DataType::Float64:    return "float64";
+    case DataType::Complex64:  return "complex64";
+    case DataType::Complex128: return "complex128";
+    }
+    return "unknown";
+}
+
+static const char* transform_name(DataType dtype) {
+    switch (dtype) {
+    case DataType::Float32:    return "R2C";
+    case DataType::Float64:    return "D2Z";
+    case DataType::Complex64:  return "C2C";
+    case DataType::Complex128: return "Z2Z";
+    }
+    return "unknown";
+}
+
+static void print_json(const BenchConfig& config, const BenchResult& result,
+                        const char* gpu_name, int cuda_major, int cuda_minor) {
+    printf("{\n");
+    printf("  \"gpu\": \"%s\",\n", gpu_name);
+    printf("  \"cuda_version\": \"%d.%d\",\n", cuda_major, cuda_minor);
+    printf("  \"dtype\": \"%s\",\n", dtype_short_name(config.dtype));
+    printf("  \"transform\": \"%s\",\n", transform_name(config.dtype));
+    printf("  \"dimensions\": %d,\n", config.dim);
+    printf("  \"nx\": %d,\n", config.nx);
+    printf("  \"ny\": %d,\n", config.ny);
+    printf("  \"nz\": %d,\n", config.nz);
+    printf("  \"mode\": \"%s\",\n", mode_name(config.mode));
+    printf("  \"warmup\": %d,\n", config.warmup);
+    printf("  \"iterations\": %d,\n", config.iters);
+    printf("  \"timings_ms\": [");
+    for (size_t i = 0; i < result.timings_ms.size(); i++) {
+        if (i > 0) printf(", ");
+        printf("%.4f", result.timings_ms[i]);
+    }
+    printf("],\n");
+    printf("  \"stats\": {\n");
+    printf("    \"min_ms\": %.4f,\n", result.min_ms);
+    printf("    \"mean_ms\": %.4f,\n", result.mean_ms);
+    printf("    \"median_ms\": %.4f,\n", result.median_ms);
+    printf("    \"stddev_ms\": %.4f\n", result.stddev_ms);
+    printf("  }\n");
+    printf("}\n");
+}
+
 int main(int argc, char* argv[]) {
     // Defaults
     DataType dtype = DataType::Float32;
@@ -48,6 +98,7 @@ int main(int argc, char* argv[]) {
     int size = -1;
     int nx = -1, ny = -1, nz = -1;
     TimingMode mode = TimingMode::Kernel;
+    OutputFormat format = OutputFormat::Human;
     int warmup = 5;
     int iters = 20;
 
@@ -97,6 +148,14 @@ int main(int argc, char* argv[]) {
             warmup = atoi(next_arg("--warmup"));
         } else if (strcmp(argv[i], "--iters") == 0) {
             iters = atoi(next_arg("--iters"));
+        } else if (strcmp(argv[i], "--format") == 0) {
+            const char* v = next_arg("--format");
+            if (strcmp(v, "human") == 0)       format = OutputFormat::Human;
+            else if (strcmp(v, "json") == 0)   format = OutputFormat::Json;
+            else {
+                fprintf(stderr, "Error: unknown format '%s' (expected human|json)\n", v);
+                return 1;
+            }
         } else {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
             return 1;
@@ -159,18 +218,20 @@ int main(int argc, char* argv[]) {
     cuda_minor = (cuda_major % 100) / 10;
     cuda_major = cuda_major / 1000;
 
-    printf("=== cuFFT Benchmark ===\n");
-    printf("GPU:        %s\n", prop.name);
-    printf("CUDA:       %d.%d\n", cuda_major, cuda_minor);
-    printf("Transform:  %s\n", dtype_name(dtype));
-    printf("Dimensions: %dD", dim);
-    if (dim == 1)      printf(" [%d]\n", nx);
-    else if (dim == 2) printf(" [%d x %d]\n", nx, ny);
-    else               printf(" [%d x %d x %d]\n", nx, ny, nz);
-    printf("Mode:       %s\n", mode_name(mode));
-    printf("Warmup:     %d\n", warmup);
-    printf("Iterations: %d\n", iters);
-    printf("\n");
+    if (format == OutputFormat::Human) {
+        printf("=== cuFFT Benchmark ===\n");
+        printf("GPU:        %s\n", prop.name);
+        printf("CUDA:       %d.%d\n", cuda_major, cuda_minor);
+        printf("Transform:  %s\n", dtype_name(dtype));
+        printf("Dimensions: %dD", dim);
+        if (dim == 1)      printf(" [%d]\n", nx);
+        else if (dim == 2) printf(" [%d x %d]\n", nx, ny);
+        else               printf(" [%d x %d x %d]\n", nx, ny, nz);
+        printf("Mode:       %s\n", mode_name(mode));
+        printf("Warmup:     %d\n", warmup);
+        printf("Iterations: %d\n", iters);
+        printf("\n");
+    }
 
     BenchConfig config;
     config.dtype = dtype;
@@ -179,17 +240,22 @@ int main(int argc, char* argv[]) {
     config.ny = ny;
     config.nz = nz;
     config.mode = mode;
+    config.format = format;
     config.warmup = warmup;
     config.iters = iters;
 
     try {
         BenchResult result = run_benchmark(config);
 
-        printf("--- Results (ms) ---\n");
-        printf("  Min:    %10.4f\n", result.min_ms);
-        printf("  Mean:   %10.4f\n", result.mean_ms);
-        printf("  Median: %10.4f\n", result.median_ms);
-        printf("  Stddev: %10.4f\n", result.stddev_ms);
+        if (format == OutputFormat::Json) {
+            print_json(config, result, prop.name, cuda_major, cuda_minor);
+        } else {
+            printf("--- Results (ms) ---\n");
+            printf("  Min:    %10.4f\n", result.min_ms);
+            printf("  Mean:   %10.4f\n", result.mean_ms);
+            printf("  Median: %10.4f\n", result.median_ms);
+            printf("  Stddev: %10.4f\n", result.stddev_ms);
+        }
     } catch (const std::exception& e) {
         fprintf(stderr, "Error: %s\n", e.what());
         return 1;

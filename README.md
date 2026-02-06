@@ -44,6 +44,7 @@ cufft-bench --dtype <type> --dim <1|2|3> --size <N> [options]
 | `--mode <kernel\|e2e>` | `kernel` | Timing mode (see [Timing modes](#timing-modes)) |
 | `--warmup <N>` | `5` | Number of untimed warmup iterations |
 | `--iters <N>` | `20` | Number of timed iterations |
+| `--format <human\|json>` | `human` | Output format (see [Output formats](#output-formats)) |
 | `--help` | — | Print usage information and exit |
 
 ### Specifying problem sizes
@@ -112,9 +113,13 @@ Timed loop:            [CUDA event start] cudaMalloc -> H2D -> exec -> D2H -> cu
 
 Use `kernel` mode to measure pure compute throughput. Use `e2e` mode to understand realistic end-to-end latency when data must be moved to and from the GPU each time.
 
-## Output
+## Output formats
 
-The tool prints a header with GPU and configuration details, followed by timing statistics:
+The `--format` flag controls how results are printed to stdout. All times are reported in milliseconds. Each iteration is timed individually using CUDA events, which measure GPU-side elapsed time with sub-microsecond resolution.
+
+### `human` (default)
+
+A header with GPU and configuration details, followed by aggregate timing statistics:
 
 ```
 === cuFFT Benchmark ===
@@ -140,7 +145,65 @@ Iterations: 20
 | Median | Middle value when sorted (robust to outliers) |
 | Stddev | Sample standard deviation (N-1 denominator) |
 
-All times are reported in milliseconds. Each iteration is timed individually using CUDA events, which measure GPU-side elapsed time with sub-microsecond resolution.
+### `json`
+
+A single JSON object to stdout containing configuration, individual per-iteration timings, and aggregate statistics. Errors are still printed to stderr.
+
+```bash
+cufft-bench --dtype float32 --dim 2 --size 512 --format json
+```
+
+```json
+{
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "cuda_version": "12.4",
+  "dtype": "float32",
+  "transform": "R2C",
+  "dimensions": 2,
+  "nx": 512,
+  "ny": 512,
+  "nz": 512,
+  "mode": "kernel",
+  "warmup": 5,
+  "iterations": 20,
+  "timings_ms": [0.0195, 0.0195, 0.0205, ...],
+  "stats": {
+    "min_ms": 0.0195,
+    "mean_ms": 0.0198,
+    "median_ms": 0.0195,
+    "stddev_ms": 0.0004
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `gpu` | string | GPU device name |
+| `cuda_version` | string | CUDA runtime version |
+| `dtype` | string | Data type (`float32`, `float64`, `complex64`, `complex128`) |
+| `transform` | string | cuFFT transform type (`R2C`, `D2Z`, `C2C`, `Z2Z`) |
+| `dimensions` | int | Transform dimensionality (1, 2, or 3) |
+| `nx`, `ny`, `nz` | int | Problem size along each axis |
+| `mode` | string | Timing mode (`kernel` or `e2e`) |
+| `warmup` | int | Number of warmup iterations |
+| `iterations` | int | Number of timed iterations |
+| `timings_ms` | array\<float\> | Individual per-iteration timings in milliseconds |
+| `stats` | object | Aggregate statistics (min, mean, median, stddev) |
+
+This format is designed for programmatic consumption, e.g. from Python:
+
+```python
+import subprocess, json
+
+result = subprocess.run(
+    ["./build/cufft-bench", "--dtype", "float32", "--dim", "1",
+     "--size", "1024", "--format", "json"],
+    capture_output=True, text=True, check=True,
+)
+data = json.loads(result.stdout)
+print(f"Median: {data['stats']['median_ms']} ms")
+print(f"Timings: {data['timings_ms']}")
+```
 
 ## Examples
 
@@ -159,4 +222,7 @@ cufft-bench --dtype complex128 --dim 2 --nx 2048 --ny 1024 --iters 100
 
 # 1D large transform with no warmup (measures cold-start kernel performance)
 cufft-bench --dtype complex64 --dim 1 --size 16777216 --warmup 0 --iters 5
+
+# JSON output for programmatic consumption
+cufft-bench --dtype float32 --dim 2 --size 512 --format json
 ```

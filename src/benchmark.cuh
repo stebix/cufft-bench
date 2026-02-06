@@ -5,6 +5,7 @@
 
 enum class DataType { Float32, Float64, Complex64, Complex128 };
 enum class TimingMode { Kernel, E2E };
+enum class OutputFormat { Human, Json };
 
 struct BenchConfig {
     DataType dtype;
@@ -13,6 +14,7 @@ struct BenchConfig {
     int ny;
     int nz;
     TimingMode mode;
+    OutputFormat format;
     int warmup;
     int iters;
 };

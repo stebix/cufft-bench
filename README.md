@@ -41,6 +41,8 @@ cufft-bench --dtype <type> --dim <1|2|3> --size <N> [options]
 | `--nx <N>` | — | Size along the x-axis |
 | `--ny <N>` | same as `--size` or `--nx` | Size along the y-axis (2D and 3D only) |
 | `--nz <N>` | same as `--size` or `--nx` | Size along the z-axis (3D only) |
+| `--device <N>` | `0` | CUDA device index (see [Device selection](#device-selection)) |
+| `--list-devices` | — | List available CUDA devices and exit |
 | `--mode <kernel\|e2e>` | `kernel` | Timing mode (see [Timing modes](#timing-modes)) |
 | `--warmup <N>` | `5` | Number of untimed warmup iterations |
 | `--iters <N>` | `20` | Number of timed iterations |
@@ -72,6 +74,36 @@ cufft-bench --dtype complex128 --dim 3 --size 256 --nz 64
 ```
 
 Only the axes relevant to `--dim` are used: 1D uses only nx, 2D uses nx and ny, 3D uses all three.
+
+## Device selection
+
+On multi-GPU systems, use `--list-devices` to see all available CUDA devices:
+
+```
+$ cufft-bench --list-devices
+Available CUDA devices:
+
+  Device 0: NVIDIA A100-SXM4-40GB
+    Compute capability: 8.0
+    Global memory:      40326 MiB
+    SM count:           108
+    Clock rate:         1410 MHz
+
+  Device 1: NVIDIA A100-SXM4-40GB
+    Compute capability: 8.0
+    Global memory:      40326 MiB
+    SM count:           108
+    Clock rate:         1410 MHz
+```
+
+Then select a specific GPU with `--device`:
+
+```bash
+# Run benchmark on device 1
+cufft-bench --device 1 --dtype float32 --dim 1 --size 1024
+```
+
+If `--device` is not specified, device 0 is used. The selected device is shown in both human and JSON output.
 
 ## Data types
 
@@ -123,7 +155,7 @@ A header with GPU and configuration details, followed by aggregate timing statis
 
 ```
 === cuFFT Benchmark ===
-GPU:        NVIDIA A100-SXM4-40GB
+Device:     0 - NVIDIA A100-SXM4-40GB
 CUDA:       12.4
 Transform:  float32 (R2C)
 Dimensions: 2D [512 x 512]
@@ -156,6 +188,7 @@ cufft-bench --dtype float32 --dim 2 --size 512 --format json
 ```json
 {
   "gpu": "NVIDIA A100-SXM4-40GB",
+  "device_id": 0,
   "cuda_version": "12.4",
   "dtype": "float32",
   "transform": "R2C",
@@ -179,6 +212,7 @@ cufft-bench --dtype float32 --dim 2 --size 512 --format json
 | Field | Type | Description |
 |-------|------|-------------|
 | `gpu` | string | GPU device name |
+| `device_id` | int | CUDA device index |
 | `cuda_version` | string | CUDA runtime version |
 | `dtype` | string | Data type (`float32`, `float64`, `complex64`, `complex128`) |
 | `transform` | string | cuFFT transform type (`R2C`, `D2Z`, `C2C`, `Z2Z`) |
@@ -222,6 +256,9 @@ cufft-bench --dtype complex128 --dim 2 --nx 2048 --ny 1024 --iters 100
 
 # 1D large transform with no warmup (measures cold-start kernel performance)
 cufft-bench --dtype complex64 --dim 1 --size 16777216 --warmup 0 --iters 5
+
+# Run on a specific GPU (device 2)
+cufft-bench --device 2 --dtype float32 --dim 1 --size 1048576
 
 # JSON output for programmatic consumption
 cufft-bench --dtype float32 --dim 2 --size 512 --format json

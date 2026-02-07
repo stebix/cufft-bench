@@ -11,6 +11,8 @@
 static void print_help(const char* prog) {
     printf("Usage: %s [options]\n\n", prog);
     printf("Options:\n");
+    printf("  --device <int>           CUDA device index (default: 0)\n");
+    printf("  --list-devices           List available CUDA devices and exit\n");
     printf("  --dtype <float32|float64|complex64|complex128>  Data type (required)\n");
     printf("  --dim <1|2|3>            Transform dimensionality (required)\n");
     printf("  --size <int>             Set all axes to this size (convenience)\n");
@@ -25,6 +27,27 @@ static void print_help(const char* prog) {
     printf("\n");
     printf("Either --size or --nx must be provided.\n");
     printf("--size sets the default for all axes; --nx/--ny/--nz override individually.\n");
+}
+
+static void list_devices() {
+    int device_count = 0;
+    cudaGetDeviceCount(&device_count);
+    if (device_count == 0) {
+        printf("No CUDA devices found.\n");
+        return;
+    }
+    printf("Available CUDA devices:\n\n");
+    for (int i = 0; i < device_count; i++) {
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, i);
+        printf("  Device %d: %s\n", i, prop.name);
+        printf("    Compute capability: %d.%d\n", prop.major, prop.minor);
+        printf("    Global memory:      %.0f MiB\n",
+               static_cast<double>(prop.totalGlobalMem) / (1024.0 * 1024.0));
+        printf("    SM count:           %d\n", prop.multiProcessorCount);
+        printf("    Clock rate:         %d MHz\n", prop.clockRate / 1000);
+        printf("\n");
+    }
 }
 
 static const char* dtype_name(DataType dtype) {
@@ -62,9 +85,11 @@ static const char* transform_name(DataType dtype) {
 }
 
 static void print_json(const BenchConfig& config, const BenchResult& result,
-                        const char* gpu_name, int cuda_major, int cuda_minor) {
+                        const char* gpu_name, int device_id,
+                        int cuda_major, int cuda_minor) {
     printf("{\n");
     printf("  \"gpu\": \"%s\",\n", gpu_name);
+    printf("  \"device_id\": %d,\n", device_id);
     printf("  \"cuda_version\": \"%d.%d\",\n", cuda_major, cuda_minor);
     printf("  \"dtype\": \"%s\",\n", dtype_short_name(config.dtype));
     printf("  \"transform\": \"%s\",\n", transform_name(config.dtype));
@@ -101,6 +126,7 @@ int main(int argc, char* argv[]) {
     OutputFormat format = OutputFormat::Human;
     int warmup = 5;
     int iters = 20;
+    int device_id = -1;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -115,6 +141,11 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_help(argv[0]);
             return 0;
+        } else if (strcmp(argv[i], "--list-devices") == 0) {
+            list_devices();
+            return 0;
+        } else if (strcmp(argv[i], "--device") == 0) {
+            device_id = atoi(next_arg("--device"));
         } else if (strcmp(argv[i], "--dtype") == 0) {
             const char* v = next_arg("--dtype");
             if (strcmp(v, "float32") == 0)         dtype = DataType::Float32;
@@ -203,13 +234,27 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Select and validate CUDA device
+    int device_count = 0;
+    cudaGetDeviceCount(&device_count);
+    if (device_count == 0) {
+        fprintf(stderr, "Error: no CUDA devices found\n");
+        return 1;
+    }
+    if (device_id < 0) device_id = 0;
+    if (device_id >= device_count) {
+        fprintf(stderr, "Error: device %d not found (available: 0-%d)\n",
+                device_id, device_count - 1);
+        return 1;
+    }
+    cudaSetDevice(device_id);
+
     // Pre-initialize CUDA context
     cudaFree(0);
 
     // Print GPU info
     cudaDeviceProp prop;
-    int device;
-    cudaGetDevice(&device);
+    int device = device_id;
     cudaGetDeviceProperties(&prop, device);
 
     int cuda_major, cuda_minor;
@@ -220,7 +265,7 @@ int main(int argc, char* argv[]) {
 
     if (format == OutputFormat::Human) {
         printf("=== cuFFT Benchmark ===\n");
-        printf("GPU:        %s\n", prop.name);
+        printf("Device:     %d - %s\n", device, prop.name);
         printf("CUDA:       %d.%d\n", cuda_major, cuda_minor);
         printf("Transform:  %s\n", dtype_name(dtype));
         printf("Dimensions: %dD", dim);
@@ -248,7 +293,7 @@ int main(int argc, char* argv[]) {
         BenchResult result = run_benchmark(config);
 
         if (format == OutputFormat::Json) {
-            print_json(config, result, prop.name, cuda_major, cuda_minor);
+            print_json(config, result, prop.name, device, cuda_major, cuda_minor);
         } else {
             printf("--- Results (ms) ---\n");
             printf("  Min:    %10.4f\n", result.min_ms);

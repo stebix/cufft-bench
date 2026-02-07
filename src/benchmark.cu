@@ -13,6 +13,30 @@
 #include <cuda_runtime.h>
 #include <cufft.h>
 
+static const char* cufftResultToString(cufftResult result) {
+    switch (result) {
+    case CUFFT_SUCCESS:                  return "CUFFT_SUCCESS";
+    case CUFFT_INVALID_PLAN:             return "CUFFT_INVALID_PLAN (invalid plan handle)";
+    case CUFFT_ALLOC_FAILED:             return "CUFFT_ALLOC_FAILED (GPU memory allocation failed)";
+    case CUFFT_INVALID_VALUE:            return "CUFFT_INVALID_VALUE (invalid parameter value)";
+    case CUFFT_INTERNAL_ERROR:           return "CUFFT_INTERNAL_ERROR (internal driver error)";
+    case CUFFT_EXEC_FAILED:              return "CUFFT_EXEC_FAILED (FFT execution failed)";
+    case CUFFT_SETUP_FAILED:             return "CUFFT_SETUP_FAILED (library initialization failed)";
+    case CUFFT_INVALID_SIZE:             return "CUFFT_INVALID_SIZE (invalid transform size)";
+    case CUFFT_INCOMPLETE_PARAMETER_LIST:return "CUFFT_INCOMPLETE_PARAMETER_LIST (missing parameters)";
+    case CUFFT_INVALID_DEVICE:           return "CUFFT_INVALID_DEVICE (invalid device for plan)";
+    case CUFFT_PARSE_ERROR:              return "CUFFT_PARSE_ERROR (internal parsing error)";
+    case CUFFT_NO_WORKSPACE:             return "CUFFT_NO_WORKSPACE (no workspace configured)";
+    case CUFFT_NOT_IMPLEMENTED:          return "CUFFT_NOT_IMPLEMENTED (feature not implemented)";
+    case CUFFT_NOT_SUPPORTED:            return "CUFFT_NOT_SUPPORTED (operation not supported)";
+    default: {
+        static thread_local char buf[64];
+        std::snprintf(buf, sizeof(buf), "unknown cuFFT error (code %d)", static_cast<int>(result));
+        return buf;
+    }
+    }
+}
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -29,7 +53,7 @@
         if (err != CUFFT_SUCCESS) {                                            \
             throw std::runtime_error(                                          \
                 std::string("cuFFT error at ") + __FILE__ + ":" +             \
-                std::to_string(__LINE__) + ": code " + std::to_string(err));   \
+                std::to_string(__LINE__) + ": " + cufftResultToString(err));   \
         }                                                                      \
     } while (0)
 
@@ -118,22 +142,43 @@ static cufftType get_cufft_type(DataType dtype) {
     return CUFFT_R2C;
 }
 
+static const char* cufft_type_name(cufftType type) {
+    switch (type) {
+    case CUFFT_R2C: return "R2C";
+    case CUFFT_D2Z: return "D2Z";
+    case CUFFT_C2C: return "C2C";
+    case CUFFT_Z2Z: return "Z2Z";
+    default:        return "unknown";
+    }
+}
+
 static cufftHandle create_plan(const BenchConfig& config) {
     cufftHandle plan;
     cufftType type = get_cufft_type(config.dtype);
 
-    switch (config.dim) {
-    case 1:
-        CUFFT_CHECK(cufftPlan1d(&plan, config.nx, type, 1));
-        break;
-    case 2:
-        CUFFT_CHECK(cufftPlan2d(&plan, config.nx, config.ny, type));
-        break;
-    case 3:
-        CUFFT_CHECK(cufftPlan3d(&plan, config.nx, config.ny, config.nz, type));
-        break;
-    default:
-        throw std::runtime_error("Invalid dimension: " + std::to_string(config.dim));
+    try {
+        switch (config.dim) {
+        case 1:
+            CUFFT_CHECK(cufftPlan1d(&plan, config.nx, type, 1));
+            break;
+        case 2:
+            CUFFT_CHECK(cufftPlan2d(&plan, config.nx, config.ny, type));
+            break;
+        case 3:
+            CUFFT_CHECK(cufftPlan3d(&plan, config.nx, config.ny, config.nz, type));
+            break;
+        default:
+            throw std::runtime_error("Invalid dimension: " + std::to_string(config.dim));
+        }
+    } catch (const std::runtime_error& e) {
+        std::string context = "Failed to create " + std::to_string(config.dim) +
+                              "D cuFFT plan (nx=" + std::to_string(config.nx);
+        if (config.dim >= 2)
+            context += ", ny=" + std::to_string(config.ny);
+        if (config.dim >= 3)
+            context += ", nz=" + std::to_string(config.nz);
+        context += std::string(", type=") + cufft_type_name(type) + "): " + e.what();
+        throw std::runtime_error(context);
     }
 
     return plan;
